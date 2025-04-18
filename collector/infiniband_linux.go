@@ -23,12 +23,19 @@ import (
 	"os"
 	"strconv"
 
+	"github.com/alecthomas/kingpin/v2"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/procfs/sysfs"
 )
 
+var (
+	infinibandDeviceInclude = kingpin.Flag("collector.infiniband.device-include", "Regexp of infiniband devices to include (mutually exclusive to device-exclude).").String()
+	infinibandDeviceExclude = kingpin.Flag("collector.infiniband.device-exclude", "Regexp of infiniband devices to exclude (mutually exclusive to device-include).").String()
+)
+
 type infinibandCollector struct {
 	fs          sysfs.FS
+	deviceFilter deviceFilter
 	metricDescs map[string]*prometheus.Desc
 	logger      *slog.Logger
 	subsystem   string
@@ -47,6 +54,7 @@ func NewInfiniBandCollector(logger *slog.Logger) (Collector, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to open sysfs: %w", err)
 	}
+	i.deviceFilter = newDeviceFilter(*infinibandDeviceExclude, *infinibandDeviceInclude)
 	i.logger = logger
 
 	// Detailed description for all metrics.
@@ -132,6 +140,9 @@ func (c *infinibandCollector) Update(ch chan<- prometheus.Metric) error {
 		ch <- prometheus.MustNewConstMetric(infoDesc, prometheus.GaugeValue, infoValue, device.Name, device.BoardID, device.FirmwareVersion, device.HCAType)
 
 		for _, port := range device.Ports {
+			if c.deviceFilter.ignored(port.Name) {
+				continue
+			}
 			portStr := strconv.FormatUint(uint64(port.Port), 10)
 
 			c.pushMetric(ch, "state_id", uint64(port.StateID), port.Name, portStr, prometheus.GaugeValue)
